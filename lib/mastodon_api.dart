@@ -1,9 +1,11 @@
-/// Support for doing something awesome.
+/// A Dart library for interacting with the Mastodon API.
 ///
-/// More dartdocs go here.
-library;
+/// This library provides tools for authenticating with Mastodon instances,
+/// making API requests, and integrating with Mastodon applications.
+library mastodon_api;
 
 export 'src/mastodon_api_base.dart';
 export 'src/auth/mastodon_oauth.dart';
+export 'src/api/mastodon_client.dart';
 
-// TODO: Export any libraries intended for clients of this package.
+// TODO: Export any additional libraries intended for clients of this package.

@@ -5,6 +5,8 @@ alwaysApply: true
 ---
 We are creating a dart library intended to be used by a flutter mastodon client. It will support the following features. We will develop the following featurees. 
 
+- we will use only the built-in flutter testing framework
+- we will not use mockito, mocktail, etc.
 - a web-auth flow 
 - the mastodon api
 - a cli example application

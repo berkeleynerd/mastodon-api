@@ -1,0 +1,7 @@
+{
+  "instance_url": "https://social.vivaldi.net",
+  "client_id": "PnxSRx1IBHKvOpd2s44pBo0yAnajPoLcwqq8zeoYL_Y",
+  "client_secret": "HWnsJp0DyHqA3Ki3ltlU1veq-pC23LAVrxt35foVzdk",
+  "redirect_url": "http://localhost:8080/callback",
+  "access_token": "6JoPyaMkUb6fNTaJWYuAd-CyPi895p4UVHxCAIWQMgk"
+}

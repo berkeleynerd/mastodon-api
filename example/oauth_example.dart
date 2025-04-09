@@ -60,11 +60,20 @@ Future<void> main() async {
     print('\nAuthentication successful!');
     print('Access Token: ${client.credentials.accessToken}');
     
-    // Save credentials for later use (in a real app, securely store these)
-    final credentialsJson = client.credentials.toJson();
-    final file = File('credentials.json');
-    await file.writeAsString(jsonEncode(credentialsJson));
-    print('\nCredentials saved to credentials.json');
+    // Create a standard config file with all necessary information
+    final config = {
+      'instance_url': instanceUrl,
+      'client_id': clientId,
+      'client_secret': clientSecret,
+      'redirect_url': redirectUrl,
+      'access_token': client.credentials.accessToken,
+    };
+    
+    // Save config for use across examples
+    final configFile = File('mastodon_config.json');
+    final encoder = JsonEncoder.withIndent('  ');
+    await configFile.writeAsString(encoder.convert(config));
+    print('\nConfig saved to mastodon_config.json');
     
     // Step 6: Make an API request to verify the credentials
     print('\nVerifying credentials...');
