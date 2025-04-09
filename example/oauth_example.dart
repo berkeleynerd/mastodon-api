@@ -32,20 +32,24 @@ Future<void> main() async {
     print('Client ID: $clientId');
     print('Client Secret: $clientSecret');
     
-    // Step 2: Initialize the OAuth client
-    final oauth = MastodonOAuth(
+    // Step 2: Create in-memory credential storage
+    final credentialStorage = InMemoryCredentialStorage();
+    
+    // Step 3: Create client setup using the factory
+    final clientSetup = await MastodonApiFactory.createClient(
       instanceUrl: instanceUrl,
       clientId: clientId,
       clientSecret: clientSecret,
-      redirectUrl: redirectUrl,
+      redirectUri: redirectUrl,
+      credentialStorage: credentialStorage,
     );
     
-    // Step 3: Get the authorization URL
-    final authUrl = oauth.getAuthorizationUrl();
+    // Step 4: Get the authorization URL
+    final authUrl = clientSetup.startAuthentication();
     print('\nOpen this URL in your browser to authorize the application:');
     print(authUrl);
     
-    // Step 4: Prompt the user to enter the authorization code
+    // Step 5: Prompt the user to enter the authorization code
     stdout.write('\nOnce authorized, enter the authorization code: ');
     final code = stdin.readLineSync();
     
@@ -54,11 +58,24 @@ Future<void> main() async {
       return;
     }
     
-    // Step 5: Exchange the authorization code for an access token
-    final client = await oauth.handleAuthorizationCode(code);
+    // Step 6: Exchange the authorization code for an access token
+    await clientSetup.handleAuthorizationCode(code);
+    
+    if (!clientSetup.isAuthenticated) {
+      print('\nAuthentication failed.');
+      return;
+    }
+    
+    // Get credentials from the storage
+    final credentials = await credentialStorage.loadCredentials();
+    
+    if (credentials == null) {
+      print('\nFailed to get credentials after authentication.');
+      return;
+    }
     
     print('\nAuthentication successful!');
-    print('Access Token: ${client.credentials.accessToken}');
+    print('Access Token: ${credentials.accessToken}');
     
     // Create a standard config file with all necessary information
     final config = {
@@ -66,7 +83,7 @@ Future<void> main() async {
       'client_id': clientId,
       'client_secret': clientSecret,
       'redirect_url': redirectUrl,
-      'access_token': client.credentials.accessToken,
+      'access_token': credentials.accessToken,
     };
     
     // Save config for use across examples
@@ -75,20 +92,20 @@ Future<void> main() async {
     await configFile.writeAsString(encoder.convert(config));
     print('\nConfig saved to mastodon_config.json');
     
-    // Step 6: Make an API request to verify the credentials
-    print('\nVerifying credentials...');
-    final response = await client.get(
-      Uri.parse('$instanceUrl/api/v1/accounts/verify_credentials'),
-    );
+    // Step 7: Use the client to verify credentials
+    final mastodonClient = clientSetup.client;
     
-    if (response.statusCode == 200) {
-      final accountData = jsonDecode(response.body);
+    print('\nVerifying credentials...');
+    try {
+      final accountData = await mastodonClient.verifyCredentials();
       print('Authenticated as: ${accountData['username']}');
       print('Display name: ${accountData['display_name']}');
-    } else {
-      print('Failed to verify credentials: ${response.statusCode} ${response.body}');
+    } catch (e) {
+      print('Failed to verify credentials: $e');
     }
     
+    // Clean up
+    clientSetup.dispose();
   } catch (e) {
     print('\nError: $e');
   }

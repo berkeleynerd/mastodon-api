@@ -35,56 +35,69 @@ Future<void> main() async {
       tokenEndpoint: Uri.parse('$instanceUrl/oauth/token'),
     );
     
-    // Create OAuth client
+    // Create in-memory credential storage
+    final credentialStorage = InMemoryCredentialStorage();
+    await credentialStorage.saveCredentials(credentials);
+    
+    // Create a client using our integrated API approach
+    print('\nCreating Mastodon client...');
+    
+    // Create the OAuth client
     final oauth = MastodonOAuth(
       instanceUrl: instanceUrl,
       clientId: clientId,
       clientSecret: clientSecret,
       redirectUrl: redirectUrl,
+      credentialStorage: credentialStorage,
     );
     
-    // Create HTTP client from credentials
-    final client = oauth.createClientFromCredentials(credentials);
+    // Create the auth manager and initialize it
+    final authManager = AuthManager(oauth: oauth);
+    await authManager.initialize();
     
-    // Make a test API request to verify credentials
+    if (!authManager.isAuthenticated) {
+      print('Failed to authenticate with stored credentials.');
+      return;
+    }
+    
+    // Create the API service
+    final apiService = ApiService(
+      authManager: authManager,
+      instanceUrl: instanceUrl,
+    );
+    
+    // Create the Mastodon client
+    final mastodonClient = MastodonClient(apiService: apiService);
+    
+    // Verify credentials
     print('\nVerifying credentials...');
-    final response = await client.get(
-      Uri.parse('$instanceUrl/api/v1/accounts/verify_credentials'),
-    );
-    
-    if (response.statusCode == 200) {
-      final accountData = jsonDecode(response.body);
+    try {
+      final accountData = await mastodonClient.verifyCredentials();
       print('Authentication successful!');
       print('Authenticated as: ${accountData['username']}');
       print('Display name: ${accountData['display_name']}');
       
-      // Make another API request to show public timeline
+      // Fetch the public timeline
       print('\nFetching public timeline...');
-      final timelineResponse = await client.get(
-        Uri.parse('$instanceUrl/api/v1/timelines/public?limit=2'),
-      );
+      final timeline = await mastodonClient.getPublicTimeline(limit: 2);
+      print('Successfully fetched ${timeline.length} posts from the public timeline:');
       
-      if (timelineResponse.statusCode == 200) {
-        final timeline = jsonDecode(timelineResponse.body) as List;
-        print('Successfully fetched ${timeline.length} posts from the public timeline:');
+      for (final post in timeline) {
+        final content = post['content'] as String;
+        final account = post['account'] as Map<String, dynamic>;
+        final displayName = account['display_name'] as String? ?? account['username'];
         
-        for (final post in timeline) {
-          final content = post['content'] as String;
-          final account = post['account'] as Map<String, dynamic>;
-          final displayName = account['display_name'] as String? ?? account['username'];
-          
-          print('\n• $displayName posted:');
-          print('  ${_stripHtml(content).substring(0, _stripHtml(content).length > 100 ? 100 : _stripHtml(content).length)}${_stripHtml(content).length > 100 ? '...' : ''}');
-        }
-      } else {
-        print('Failed to fetch timeline: ${timelineResponse.statusCode} ${timelineResponse.body}');
+        print('\n• $displayName posted:');
+        print('  ${_stripHtml(content).substring(0, _stripHtml(content).length > 100 ? 100 : _stripHtml(content).length)}${_stripHtml(content).length > 100 ? '...' : ''}');
       }
-    } else if (response.statusCode == 401) {
-      print('Authentication failed: Credentials may be expired');
-      print('Error details: ${response.body}');
-      print('\nPlease run oauth_example.dart to get new credentials.');
-    } else {
-      print('Failed to verify credentials: ${response.statusCode} ${response.body}');
+    } catch (e) {
+      if (e is ApiError && e.type == ApiErrorType.authentication) {
+        print('Authentication failed: Credentials may be expired');
+        print('Error details: ${e.message}');
+        print('\nPlease run oauth_example.dart to get new credentials.');
+      } else {
+        print('Error: $e');
+      }
     }
   } catch (e, stackTrace) {
     print('\nError: $e');

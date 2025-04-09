@@ -42,12 +42,34 @@ Future<void> main() async {
       redirectUrl: redirectUrl,
     );
     
-    final client = oauth.createClientFromCredentials(credentials);
+    final oauthClient = oauth.createClientFromCredentials(credentials);
+    
+    // Create an in-memory credential storage with pre-loaded credentials
+    final credentialStorage = InMemoryCredentialStorage();
+    await credentialStorage.saveCredentials(credentials);
+    
+    // Create OAuth with credential storage
+    final oauthWithStorage = MastodonOAuth(
+      instanceUrl: instanceUrl,
+      clientId: clientId,
+      clientSecret: clientSecret,
+      redirectUrl: redirectUrl,
+      credentialStorage: credentialStorage,
+    );
+    
+    // Create AuthManager with credential storage
+    final authManager = AuthManager(oauth: oauthWithStorage);
+    await authManager.initialize(); // This will load the credentials we just saved
+    
+    // Create API service
+    final apiService = ApiService(
+      authManager: authManager,
+      instanceUrl: instanceUrl,
+    );
     
     // Create Mastodon API client
     final mastodon = MastodonClient(
-      instanceUrl: instanceUrl,
-      client: client,
+      apiService: apiService,
     );
     
     // Get instance information

@@ -37,6 +37,12 @@ Then run:
 dart pub get
 ```
 
+Or for Flutter:
+
+```bash
+flutter pub get
+```
+
 ## Usage
 
 ### OAuth2 Authentication
@@ -51,7 +57,7 @@ import 'package:mastodon_api/mastodon_api.dart';
 
 Future<void> main() async {
   // Configuration
-  const instanceUrl = 'https://mastodon.social'; // Your Mastodon instance
+  const instanceUrl = 'https://social.vivaldi.net'; // Your Mastodon instance
   const applicationName = 'My Mastodon App';
   const redirectUrl = 'http://localhost:8080/callback';
   
@@ -114,7 +120,7 @@ import 'package:oauth2/oauth2.dart' as oauth2;
 
 Future<void> main() async {
   // Configuration
-  const instanceUrl = 'https://mastodon.social';
+  const instanceUrl = 'https://social.vivaldi.net';
   const clientId = 'your_client_id';
   const clientSecret = 'your_client_secret';
   const redirectUrl = 'http://localhost:8080/callback';
@@ -141,6 +147,318 @@ Future<void> main() async {
   );
   
   print('Home timeline: ${response.body}');
+}
+```
+
+## Flutter Integration
+
+This library is designed to work seamlessly with Flutter applications. Here's how to integrate it:
+
+### Setting up Authentication in Flutter
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:mastodon_api/mastodon_api.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class MastodonLoginScreen extends StatefulWidget {
+  @override
+  _MastodonLoginScreenState createState() => _MastodonLoginScreenState();
+}
+
+class _MastodonLoginScreenState extends State<MastodonLoginScreen> {
+  late MastodonOAuth oauth;
+  final instanceUrl = 'https://mastodon.social';
+  final redirectUrl = 'myapp://callback';
+  String? authUrl;
+  
+  @override
+  void initState() {
+    super.initState();
+    _initializeOAuth();
+  }
+  
+  Future<void> _initializeOAuth() async {
+    // Register or load existing credentials
+    try {
+      // Check if we already have client credentials
+      final prefs = await SharedPreferences.getInstance();
+      String? clientId = prefs.getString('mastodon_client_id');
+      String? clientSecret = prefs.getString('mastodon_client_secret');
+      
+      if (clientId == null || clientSecret == null) {
+        // Register new application
+        final registration = await MastodonOAuth.registerApplication(
+          instanceUrl: instanceUrl,
+          applicationName: 'My Flutter Mastodon App',
+          redirectUris: [redirectUrl],
+          scopes: ['read', 'write', 'follow'],
+        );
+        
+        clientId = registration['client_id']!;
+        clientSecret = registration['client_secret']!;
+        
+        // Save for future use
+        await prefs.setString('mastodon_client_id', clientId);
+        await prefs.setString('mastodon_client_secret', clientSecret);
+      }
+      
+      // Initialize OAuth
+      oauth = MastodonOAuth(
+        instanceUrl: instanceUrl,
+        clientId: clientId,
+        clientSecret: clientSecret,
+        redirectUrl: redirectUrl,
+      );
+      
+      // Get authorization URL
+      final url = oauth.getAuthorizationUrl();
+      setState(() {
+        authUrl = url;
+      });
+    } catch (e) {
+      print('Error initializing OAuth: $e');
+    }
+  }
+  
+  Future<void> _handleRedirect(String url) async {
+    if (url.startsWith(redirectUrl)) {
+      final uri = Uri.parse(url);
+      final code = uri.queryParameters['code'];
+      
+      if (code != null) {
+        try {
+          // Exchange code for token
+          final client = await oauth.handleAuthorizationCode(code);
+          
+          // Save credentials securely
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('mastodon_credentials', client.credentials.toJson());
+          
+          // Navigate to home screen
+          Navigator.of(context).pushReplacementNamed('/home');
+        } catch (e) {
+          print('Error handling authorization code: $e');
+        }
+      }
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    if (authUrl == null) {
+      return Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    
+    return Scaffold(
+      appBar: AppBar(title: Text('Login to Mastodon')),
+      body: WebView(
+        initialUrl: authUrl,
+        javascriptMode: JavascriptMode.unrestricted,
+        navigationDelegate: (NavigationRequest request) {
+          if (request.url.startsWith(redirectUrl)) {
+            _handleRedirect(request.url);
+            return NavigationDecision.prevent;
+          }
+          return NavigationDecision.navigate;
+        },
+      ),
+    );
+  }
+}
+```
+
+### Using the API Client in Flutter
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:mastodon_api/mastodon_api.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:oauth2/oauth2.dart' as oauth2;
+
+class HomeTimelineScreen extends StatefulWidget {
+  @override
+  _HomeTimelineScreenState createState() => _HomeTimelineScreenState();
+}
+
+class _HomeTimelineScreenState extends State<HomeTimelineScreen> {
+  late MastodonClient mastodon;
+  List<dynamic> posts = [];
+  bool isLoading = true;
+  
+  @override
+  void initState() {
+    super.initState();
+    _initializeClient();
+  }
+  
+  Future<void> _initializeClient() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final instanceUrl = prefs.getString('mastodon_instance_url') ?? 'https://mastodon.social';
+      final clientId = prefs.getString('mastodon_client_id')!;
+      final clientSecret = prefs.getString('mastodon_client_secret')!;
+      final redirectUrl = 'myapp://callback';
+      
+      // Create credential storage that uses shared preferences
+      final credentialStorage = CredentialStorage(
+        saveCredentials: (credentials) async {
+          await prefs.setString('mastodon_credentials', credentials.toJson());
+          return true;
+        },
+        loadCredentials: () async {
+          final json = prefs.getString('mastodon_credentials');
+          if (json == null) return null;
+          return oauth2.Credentials.fromJson(json);
+        },
+      );
+      
+      // Create OAuth with credential storage
+      final oauth = MastodonOAuth(
+        instanceUrl: instanceUrl,
+        clientId: clientId,
+        clientSecret: clientSecret,
+        redirectUrl: redirectUrl,
+        credentialStorage: credentialStorage,
+      );
+      
+      // Create AuthManager
+      final authManager = AuthManager(oauth: oauth);
+      await authManager.initialize();
+      
+      // Create API service
+      final apiService = ApiService(
+        authManager: authManager,
+        instanceUrl: instanceUrl,
+      );
+      
+      // Create Mastodon client
+      mastodon = MastodonClient(apiService: apiService);
+      
+      // Load timeline
+      final timeline = await mastodon.getHomeTimeline();
+      setState(() {
+        posts = timeline;
+        isLoading = false;
+      });
+    } catch (e) {
+      print('Error initializing client: $e');
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Scaffold(
+        appBar: AppBar(title: Text('Home Timeline')),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    
+    return Scaffold(
+      appBar: AppBar(title: Text('Home Timeline')),
+      body: ListView.builder(
+        itemCount: posts.length,
+        itemBuilder: (context, index) {
+          final post = posts[index];
+          final account = post['account'];
+          
+          return ListTile(
+            leading: CircleAvatar(
+              backgroundImage: NetworkImage(account['avatar']),
+            ),
+            title: Text('${account['display_name']} @${account['username']}'),
+            subtitle: Text(
+              _stripHtml(post['content']),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          // Navigate to compose screen
+        },
+        child: Icon(Icons.create),
+      ),
+    );
+  }
+  
+  String _stripHtml(String html) {
+    return html
+        .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .trim();
+  }
+}
+```
+
+### Testing in Flutter
+
+When testing this library in a Flutter application:
+
+1. Always run the tests before using the library in your app:
+   ```bash
+   dart test
+   ```
+
+2. For Flutter applications using this library, follow these best practices:
+   - Use a development flavor for macOS development
+   - Create mock implementations of the API services for testing your Flutter UI
+   - Use dependency injection to swap between real and mock implementations
+
+Example of setting up tests in your Flutter app:
+
+```dart
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:mastodon_api/mastodon_api.dart';
+
+class MockMastodonClient extends Mock implements MastodonClient {}
+
+void main() {
+  late MockMastodonClient mockClient;
+  
+  setUp(() {
+    mockClient = MockMastodonClient();
+  });
+  
+  group('Home timeline', () {
+    test('loads posts successfully', () async {
+      // Arrange
+      when(() => mockClient.getHomeTimeline())
+          .thenAnswer((_) async => [
+                {
+                  'id': '1',
+                  'content': '<p>Test post</p>',
+                  'account': {
+                    'id': '1',
+                    'username': 'test',
+                    'display_name': 'Test User',
+                    'avatar': 'https://example.com/avatar.png',
+                  },
+                },
+              ]);
+              
+      // Act
+      final result = await mockClient.getHomeTimeline();
+      
+      // Assert
+      expect(result.length, 1);
+      expect(result[0]['account']['username'], 'test');
+    });
+  });
 }
 ```
 

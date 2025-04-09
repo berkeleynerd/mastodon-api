@@ -9,7 +9,7 @@ environment:
 # Add regular dependencies here.
 dependencies:
   http: ^1.1.0
-  oauth2: ^2.0.2
+  oauth2: ^2.0.3
   crypto: ^3.0.3
   meta: ^1.16.0
 
