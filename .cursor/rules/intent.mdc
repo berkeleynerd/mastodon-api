@@ -5,8 +5,14 @@ alwaysApply: true
 ---
 We are creating a dart library intended to be used by a flutter mastodon client. It will support the following features. We will develop the following featurees. 
 
-- we will use only the built-in flutter testing framework
-- we will not use mockito, mocktail, etc.
+1. Always run the app using the development flavor for platform macos. 
+2. Always make sure all tests run before running the application.
+3. We will use only the built-in flutter testing framework.
+4. We will test only the API surfaces between components. We won't test inside them. 
+5. To test external services we will create dummy services to interact with. 
+
+We will develop the following featurees:
+
 - a web-auth flow 
 - the mastodon api
 - a cli example application

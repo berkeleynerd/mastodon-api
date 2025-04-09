@@ -13,6 +13,7 @@ class MastodonOAuth {
   final String clientSecret;
   final String redirectUrl;
   final List<String> scopes;
+  final http.Client? _httpClient;
   
   // For PKCE
   String? _codeVerifier;
@@ -24,13 +25,15 @@ class MastodonOAuth {
   /// [clientSecret] - The client secret obtained from the Mastodon instance
   /// [redirectUrl] - The redirect URL registered with the Mastodon instance
   /// [scopes] - The list of scopes required for your application
+  /// [httpClient] - Optional HTTP client for requests (useful for testing)
   MastodonOAuth({
     required this.instanceUrl,
     required this.clientId,
     required this.clientSecret,
     required this.redirectUrl,
     this.scopes = const ['read', 'write', 'follow'],
-  });
+    http.Client? httpClient,
+  }) : _httpClient = httpClient;
   
   /// Generates the authorization URL for the OAuth2 flow.
   ///
@@ -74,47 +77,55 @@ class MastodonOAuth {
     // Directly exchange the code for a token using a POST request
     final tokenEndpoint = Uri.parse('$instanceUrl/oauth/token');
     
-    final response = await http.post(
-      tokenEndpoint,
-      body: {
-        'client_id': clientId,
-        'client_secret': clientSecret,
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': redirectUrl,
-        'scope': scopes.join(' '),
-        'code_verifier': _codeVerifier!,
-      },
-    );
-    
-    if (response.statusCode == 200) {
-      final Map<String, dynamic> data = jsonDecode(response.body);
-      
-      // Create OAuth2 credentials from the response data
-      final credentials = oauth2.Credentials(
-        data['access_token'] as String,
-        refreshToken: data['refresh_token'] as String?,
-        idToken: data['id_token'] as String?,
-        tokenEndpoint: tokenEndpoint,
-        scopes: data['scope'] != null
-            ? (data['scope'] as String).split(' ')
-            : scopes,
-        expiration: data['expires_in'] != null
-            ? DateTime.now().add(Duration(seconds: data['expires_in'] as int))
-            : null,
+    final client = _httpClient ?? http.Client();
+    try {
+      final response = await client.post(
+        tokenEndpoint,
+        body: {
+          'client_id': clientId,
+          'client_secret': clientSecret,
+          'grant_type': 'authorization_code',
+          'code': code,
+          'redirect_uri': redirectUrl,
+          'scope': scopes.join(' '),
+          'code_verifier': _codeVerifier!,
+        },
       );
       
-      // Create and return the OAuth2 client
-      return oauth2.Client(
-        credentials,
-        identifier: clientId,
-        secret: clientSecret,
-        onCredentialsRefreshed: _onCredentialsRefreshed,
-      );
-    } else {
-      throw Exception(
-        'Failed to exchange authorization code for token: ${response.statusCode} ${response.body}',
-      );
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = jsonDecode(response.body);
+        
+        // Create OAuth2 credentials from the response data
+        final credentials = oauth2.Credentials(
+          data['access_token'] as String,
+          refreshToken: data['refresh_token'] as String?,
+          idToken: data['id_token'] as String?,
+          tokenEndpoint: tokenEndpoint,
+          scopes: data['scope'] != null
+              ? (data['scope'] as String).split(' ')
+              : scopes,
+          expiration: data['expires_in'] != null
+              ? DateTime.now().add(Duration(seconds: data['expires_in'] as int))
+              : null,
+        );
+        
+        // Create and return the OAuth2 client
+        return oauth2.Client(
+          credentials,
+          identifier: clientId,
+          secret: clientSecret,
+          onCredentialsRefreshed: _onCredentialsRefreshed,
+        );
+      } else {
+        throw Exception(
+          'Failed to exchange authorization code for token: ${response.statusCode} ${response.body}',
+        );
+      }
+    } finally {
+      // Only close the client if we created it
+      if (_httpClient == null) {
+        client.close();
+      }
     }
   }
   
@@ -168,6 +179,7 @@ class MastodonOAuth {
   /// [website] - The website of your application (optional)
   /// [redirectUris] - A list of redirect URIs (defaults to ['urn:ietf:wg:oauth:2.0:oob'])
   /// [scopes] - The list of scopes to request
+  /// [httpClient] - Optional HTTP client for requests (useful for testing)
   ///
   /// Returns a [Future] that completes with the client ID and client secret.
   static Future<Map<String, String>> registerApplication({
@@ -176,29 +188,38 @@ class MastodonOAuth {
     String? website,
     List<String> redirectUris = const ['urn:ietf:wg:oauth:2.0:oob'],
     List<String> scopes = const ['read', 'write', 'follow'],
+    http.Client? httpClient,
   }) async {
-    final response = await http.post(
-      Uri.parse('$instanceUrl/api/v1/apps'),
-      body: {
-        'client_name': applicationName,
-        'redirect_uris': redirectUris.join('\n'),
-        'scopes': scopes.join(' '),
-        if (website != null) 'website': website,
-      },
-    );
-    
-    if (response.statusCode == 200) {
-      // Parse response body to JSON
-      final Map<String, dynamic> data = _parseResponseBody(response.body);
-      
-      return {
-        'client_id': data['client_id'] as String,
-        'client_secret': data['client_secret'] as String,
-      };
-    } else {
-      throw Exception(
-        'Failed to register application: ${response.statusCode} ${response.body}',
+    final client = httpClient ?? http.Client();
+    try {
+      final response = await client.post(
+        Uri.parse('$instanceUrl/api/v1/apps'),
+        body: {
+          'client_name': applicationName,
+          'redirect_uris': redirectUris.join('\n'),
+          'scopes': scopes.join(' '),
+          if (website != null) 'website': website,
+        },
       );
+      
+      if (response.statusCode == 200) {
+        // Parse response body to JSON
+        final Map<String, dynamic> data = _parseResponseBody(response.body);
+        
+        return {
+          'client_id': data['client_id'] as String,
+          'client_secret': data['client_secret'] as String,
+        };
+      } else {
+        throw Exception(
+          'Failed to register application: ${response.statusCode} ${response.body}',
+        );
+      }
+    } finally {
+      // Only close the client if we created it
+      if (httpClient == null) {
+        client.close();
+      }
     }
   }
   
