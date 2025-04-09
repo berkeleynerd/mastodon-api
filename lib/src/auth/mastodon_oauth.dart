@@ -5,6 +5,9 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:oauth2/oauth2.dart' as oauth2;
+import 'package:meta/meta.dart';
+
+import 'credential_storage.dart';
 
 /// A class for handling Mastodon OAuth2 authentication.
 class MastodonOAuth {
@@ -14,6 +17,7 @@ class MastodonOAuth {
   final String redirectUrl;
   final List<String> scopes;
   final http.Client? _httpClient;
+  final CredentialStorage? _credentialStorage;
   
   // For PKCE
   String? _codeVerifier;
@@ -26,6 +30,7 @@ class MastodonOAuth {
   /// [redirectUrl] - The redirect URL registered with the Mastodon instance
   /// [scopes] - The list of scopes required for your application
   /// [httpClient] - Optional HTTP client for requests (useful for testing)
+  /// [credentialStorage] - Optional storage for persisting OAuth credentials
   MastodonOAuth({
     required this.instanceUrl,
     required this.clientId,
@@ -33,7 +38,43 @@ class MastodonOAuth {
     required this.redirectUrl,
     this.scopes = const ['read', 'write', 'follow'],
     http.Client? httpClient,
-  }) : _httpClient = httpClient;
+    CredentialStorage? credentialStorage,
+  }) : _httpClient = httpClient,
+       _credentialStorage = credentialStorage;
+  
+  /// Checks if there are stored credentials available.
+  Future<bool> hasStoredCredentials() async {
+    if (_credentialStorage == null) {
+      return false;
+    }
+    
+    final credentials = await _credentialStorage.loadCredentials();
+    return credentials != null;
+  }
+  
+  /// Loads stored credentials and creates an OAuth2 client.
+  /// 
+  /// Returns null if no credentials are stored or if the stored credentials
+  /// cannot be loaded.
+  Future<oauth2.Client?> loadClientFromStorage() async {
+    if (_credentialStorage == null) {
+      return null;
+    }
+    
+    final credentials = await _credentialStorage.loadCredentials();
+    if (credentials == null) {
+      return null;
+    }
+    
+    return createClientFromCredentials(credentials);
+  }
+  
+  /// Clears any stored credentials.
+  Future<void> logout() async {
+    if (_credentialStorage != null) {
+      await _credentialStorage.clearCredentials();
+    }
+  }
   
   /// Generates the authorization URL for the OAuth2 flow.
   ///
@@ -109,13 +150,13 @@ class MastodonOAuth {
               : null,
         );
         
+        // Store credentials if we have a credential storage
+        if (_credentialStorage != null) {
+          await _credentialStorage.saveCredentials(credentials);
+        }
+        
         // Create and return the OAuth2 client
-        return oauth2.Client(
-          credentials,
-          identifier: clientId,
-          secret: clientSecret,
-          onCredentialsRefreshed: _onCredentialsRefreshed,
-        );
+        return createClientFromCredentials(credentials);
       } else {
         throw Exception(
           'Failed to exchange authorization code for token: ${response.statusCode} ${response.body}',
@@ -147,8 +188,15 @@ class MastodonOAuth {
   ///
   /// Override this method to save the refreshed credentials for later use.
   void _onCredentialsRefreshed(oauth2.Credentials credentials) {
-    // Override this to save credentials when they are refreshed
-    print('Credentials refreshed: ${credentials.toJson()}');
+    // Save refreshed credentials to storage if available
+    _credentialStorage?.saveCredentials(credentials);
+  }
+  
+  /// Exposes the onCredentialsRefreshed functionality for testing.
+  /// This should only be used in tests.
+  @visibleForTesting
+  void callOnCredentialsRefreshed(oauth2.Credentials credentials) {
+    _onCredentialsRefreshed(credentials);
   }
   
   /// Generates a random code verifier for PKCE.

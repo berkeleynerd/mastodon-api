@@ -11,6 +11,7 @@ dependencies:
   http: ^1.1.0
   oauth2: ^2.0.2
   crypto: ^3.0.3
+  meta: ^1.16.0
 
 dev_dependencies:
   http_mock_adapter: ^0.6.1
