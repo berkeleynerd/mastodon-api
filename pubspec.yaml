@@ -1,0 +1,17 @@
+name: mastodon_api
+description: A starting point for Dart libraries or applications.
+version: 1.0.0
+# repository: https://github.com/my_org/my_repo
+
+environment:
+  sdk: ^3.7.2
+
+# Add regular dependencies here.
+dependencies:
+  http: ^1.1.0
+  oauth2: ^2.0.2
+  crypto: ^3.0.3
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.24.0

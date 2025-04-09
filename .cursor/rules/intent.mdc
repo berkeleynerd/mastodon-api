@@ -1,0 +1,10 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+We are creating a dart library intended to be used by a flutter mastodon client. It will support the following features. We will develop the following featurees. 
+
+- a web-auth flow 
+- the mastodon api
+- a cli example application

@@ -1,0 +1,217 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
+import 'package:oauth2/oauth2.dart' as oauth2;
+
+/// A class for handling Mastodon OAuth2 authentication.
+class MastodonOAuth {
+  final String instanceUrl;
+  final String clientId;
+  final String clientSecret;
+  final String redirectUrl;
+  final List<String> scopes;
+  
+  // For PKCE
+  String? _codeVerifier;
+  
+  /// Creates a new MastodonOAuth instance.
+  ///
+  /// [instanceUrl] - The URL of the Mastodon instance (e.g., "https://mastodon.social")
+  /// [clientId] - The client ID obtained from the Mastodon instance
+  /// [clientSecret] - The client secret obtained from the Mastodon instance
+  /// [redirectUrl] - The redirect URL registered with the Mastodon instance
+  /// [scopes] - The list of scopes required for your application
+  MastodonOAuth({
+    required this.instanceUrl,
+    required this.clientId,
+    required this.clientSecret,
+    required this.redirectUrl,
+    this.scopes = const ['read', 'write', 'follow'],
+  });
+  
+  /// Generates the authorization URL for the OAuth2 flow.
+  ///
+  /// This URL should be opened in a browser to start the OAuth2 flow.
+  /// After authorization, the user will be redirected to the [redirectUrl].
+  String getAuthorizationUrl() {
+    final authorizationEndpoint = Uri.parse('$instanceUrl/oauth/authorize');
+    
+    // Generate code verifier and challenge for PKCE
+    _codeVerifier = _generateCodeVerifier();
+    final codeChallenge = _generateCodeChallenge(_codeVerifier!);
+    
+    // Base parameters for authorization request
+    final params = {
+      'response_type': 'code',
+      'client_id': clientId,
+      'redirect_uri': redirectUrl,
+      'code_challenge': codeChallenge,
+      'code_challenge_method': 'S256',
+      'scope': scopes.join(' '),
+    };
+    
+    // Build the URL with query parameters
+    final queryString = params.entries
+        .map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
+        .join('&');
+    
+    return '$authorizationEndpoint?$queryString';
+  }
+
+  /// Exchanges an authorization code for an access token.
+  ///
+  /// [code] - The authorization code received from the authorization server
+  ///
+  /// Returns a [Future] that completes with the OAuth2 client when the exchange is complete.
+  Future<oauth2.Client> handleAuthorizationCode(String code) async {
+    if (_codeVerifier == null) {
+      throw Exception('Authorization URL has not been generated. Call getAuthorizationUrl() first.');
+    }
+    
+    // Directly exchange the code for a token using a POST request
+    final tokenEndpoint = Uri.parse('$instanceUrl/oauth/token');
+    
+    final response = await http.post(
+      tokenEndpoint,
+      body: {
+        'client_id': clientId,
+        'client_secret': clientSecret,
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': redirectUrl,
+        'scope': scopes.join(' '),
+        'code_verifier': _codeVerifier!,
+      },
+    );
+    
+    if (response.statusCode == 200) {
+      final Map<String, dynamic> data = jsonDecode(response.body);
+      
+      // Create OAuth2 credentials from the response data
+      final credentials = oauth2.Credentials(
+        data['access_token'] as String,
+        refreshToken: data['refresh_token'] as String?,
+        idToken: data['id_token'] as String?,
+        tokenEndpoint: tokenEndpoint,
+        scopes: data['scope'] != null
+            ? (data['scope'] as String).split(' ')
+            : scopes,
+        expiration: data['expires_in'] != null
+            ? DateTime.now().add(Duration(seconds: data['expires_in'] as int))
+            : null,
+      );
+      
+      // Create and return the OAuth2 client
+      return oauth2.Client(
+        credentials,
+        identifier: clientId,
+        secret: clientSecret,
+        onCredentialsRefreshed: _onCredentialsRefreshed,
+      );
+    } else {
+      throw Exception(
+        'Failed to exchange authorization code for token: ${response.statusCode} ${response.body}',
+      );
+    }
+  }
+  
+  /// Creates a client from saved credentials.
+  ///
+  /// [credentials] - The saved OAuth2 credentials
+  ///
+  /// Returns an OAuth2 client that can be used to make authenticated requests.
+  oauth2.Client createClientFromCredentials(oauth2.Credentials credentials) {
+    return oauth2.Client(
+      credentials,
+      identifier: clientId,
+      secret: clientSecret,
+      onCredentialsRefreshed: _onCredentialsRefreshed,
+    );
+  }
+  
+  /// Called when credentials are refreshed.
+  ///
+  /// Override this method to save the refreshed credentials for later use.
+  void _onCredentialsRefreshed(oauth2.Credentials credentials) {
+    // Override this to save credentials when they are refreshed
+    print('Credentials refreshed: ${credentials.toJson()}');
+  }
+  
+  /// Generates a random code verifier for PKCE.
+  String _generateCodeVerifier() {
+    final random = Random.secure();
+    final codeVerifierBytes = List<int>.generate(96, (_) => random.nextInt(256));
+    return base64Url.encode(codeVerifierBytes)
+        .replaceAll('+', '-')
+        .replaceAll('/', '_')
+        .replaceAll('=', '')
+        .substring(0, 128);
+  }
+  
+  /// Generates a code challenge from the code verifier using SHA-256.
+  String _generateCodeChallenge(String codeVerifier) {
+    final bytes = utf8.encode(codeVerifier);
+    final digest = sha256.convert(bytes);
+    return base64Url.encode(digest.bytes)
+        .replaceAll('+', '-')
+        .replaceAll('/', '_')
+        .replaceAll('=', '');
+  }
+  
+  /// Registers a new application with the Mastodon instance.
+  ///
+  /// [instanceUrl] - The URL of the Mastodon instance
+  /// [applicationName] - The name of your application
+  /// [website] - The website of your application (optional)
+  /// [redirectUris] - A list of redirect URIs (defaults to ['urn:ietf:wg:oauth:2.0:oob'])
+  /// [scopes] - The list of scopes to request
+  ///
+  /// Returns a [Future] that completes with the client ID and client secret.
+  static Future<Map<String, String>> registerApplication({
+    required String instanceUrl,
+    required String applicationName,
+    String? website,
+    List<String> redirectUris = const ['urn:ietf:wg:oauth:2.0:oob'],
+    List<String> scopes = const ['read', 'write', 'follow'],
+  }) async {
+    final response = await http.post(
+      Uri.parse('$instanceUrl/api/v1/apps'),
+      body: {
+        'client_name': applicationName,
+        'redirect_uris': redirectUris.join('\n'),
+        'scopes': scopes.join(' '),
+        if (website != null) 'website': website,
+      },
+    );
+    
+    if (response.statusCode == 200) {
+      // Parse response body to JSON
+      final Map<String, dynamic> data = _parseResponseBody(response.body);
+      
+      return {
+        'client_id': data['client_id'] as String,
+        'client_secret': data['client_secret'] as String,
+      };
+    } else {
+      throw Exception(
+        'Failed to register application: ${response.statusCode} ${response.body}',
+      );
+    }
+  }
+  
+  /// Helper method to parse the response body from the server.
+  ///
+  /// Handles both JSON and form-encoded responses from different Mastodon instances.
+  static Map<String, dynamic> _parseResponseBody(String body) {
+    try {
+      // First try to parse as JSON
+      return jsonDecode(body) as Map<String, dynamic>;
+    } catch (e) {
+      // If that fails, try to parse as form data
+      return Uri.splitQueryString(body);
+    }
+  }
+} 
