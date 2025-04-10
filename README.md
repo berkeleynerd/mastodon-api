@@ -480,3 +480,43 @@ This package implements several security best practices:
 - **Secure Storage**: Options for encrypting stored credentials
 
 For detailed security guidelines, see [SECURITY.md](SECURITY.md).
+
+## Secure Credential Storage
+
+This library provides a `CredentialStorage` interface for persisting OAuth credentials. For production applications, we recommend using platform-specific secure storage solutions:
+
+- **Flutter Applications**: Use [flutter_secure_storage](https://pub.dev/packages/flutter_secure_storage) with a custom implementation of `CredentialStorage`
+- **Web Applications**: Use the Web Crypto API or localStorage with additional encryption
+- **Native Applications**: Use Keychain (iOS) or KeyStore (Android)
+
+Example implementation with flutter_secure_storage:
+
+```dart
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:mastodon_api/mastodon_api.dart';
+import 'package:oauth2/oauth2.dart' as oauth2;
+
+class FlutterSecureCredentialStorage implements CredentialStorage {
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  final String _key = 'mastodon_credentials';
+  
+  @override
+  Future<void> saveCredentials(oauth2.Credentials credentials) async {
+    await _storage.write(key: _key, value: credentials.toJson());
+  }
+  
+  @override
+  Future<oauth2.Credentials?> loadCredentials() async {
+    final json = await _storage.read(key: _key);
+    if (json == null) return null;
+    return oauth2.Credentials.fromJson(json);
+  }
+  
+  @override
+  Future<void> clearCredentials() async {
+    await _storage.delete(key: _key);
+  }
+}
+```
+
+Note that the library intentionally does not include Flutter-specific dependencies to maintain platform neutrality. Implement secure storage appropriate for your application platform.
