@@ -2,8 +2,6 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:mastodon_api/mastodon_api.dart';
-import 'package:mastodon_api/src/auth/auth_manager.dart';
-import 'package:mastodon_api/src/auth/credential_storage.dart';
 import 'package:oauth2/oauth2.dart' as oauth2;
 import 'package:test/test.dart';
 
