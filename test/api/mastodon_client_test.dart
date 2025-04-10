@@ -5,6 +5,29 @@ import 'package:mastodon_api/mastodon_api.dart';
 import 'package:oauth2/oauth2.dart' as oauth2;
 import 'package:test/test.dart';
 
+import '../helpers/mock_http_client.dart';
+import '../helpers/mock_auth_manager.dart';
+
+/// Mock OAuth client for testing
+class MockOAuthClient extends http.BaseClient {
+  final oauth2.Credentials credentials;
+  final http.Client delegateClient;
+  
+  MockOAuthClient({
+    required this.credentials,
+    required this.delegateClient,
+  });
+  
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    // Add auth header to the request
+    request.headers['Authorization'] = 'Bearer ${credentials.accessToken}';
+    
+    // Delegate to the MockHttpClient which will return our mocked responses
+    return delegateClient.send(request);
+  }
+}
+
 void main() {
   group('MastodonClient API endpoints', () {
     const instanceUrl = 'https://example.mastodon.social';
@@ -15,7 +38,7 @@ void main() {
     late InMemoryCredentialStorage credentialStorage;
     late MockHttpClient httpClient;
     late MastodonClient client;
-    late AuthManager authManager;
+    late MockAuthManager authManager;
     
     setUp(() async {
       credentialStorage = InMemoryCredentialStorage();
@@ -48,6 +71,10 @@ void main() {
       
       // Create client
       client = MastodonClient(apiService: apiService);
+    });
+    
+    tearDown(() {
+      httpClient.reset();
     });
     
     test('getStatus returns status details', () async {
@@ -303,103 +330,4 @@ void main() {
       await expectLater(client.clearNotifications(), completes);
     });
   });
-}
-
-/// Simple mock HTTP client for testing
-class MockHttpClient extends http.BaseClient {
-  final Map<String, http.Response> _responses = {};
-  
-  void mockGet(String url, http.Response response) {
-    _responses['GET:$url'] = response;
-  }
-  
-  void mockPost(String url, http.Response response) {
-    _responses['POST:$url'] = response;
-  }
-  
-  @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    final method = request.method;
-    final url = request.url.toString();
-    final key = '$method:$url';
-    
-    // First try exact match
-    if (_responses.containsKey(key)) {
-      final response = _responses[key]!;
-      return http.StreamedResponse(
-        Stream.value(utf8.encode(response.body)),
-        response.statusCode,
-        headers: response.headers,
-      );
-    }
-    
-    // Try to find a partial URL match
-    String? matchingKey;
-    for (var k in _responses.keys) {
-      if (k.startsWith('$method:') && url.contains(k.substring(method.length + 1))) {
-        matchingKey = k;
-        break;
-      }
-    }
-    
-    if (matchingKey != null) {
-      final response = _responses[matchingKey]!;
-      return http.StreamedResponse(
-        Stream.value(utf8.encode(response.body)),
-        response.statusCode,
-        headers: response.headers,
-      );
-    }
-    
-    // Return a 404 if no match
-    return http.StreamedResponse(
-      Stream.value(utf8.encode('{"error": "Not Found"}')),
-      404,
-      headers: {'content-type': 'application/json'},
-    );
-  }
-}
-
-/// Mock OAuth client for testing
-class MockOAuthClient extends http.BaseClient {
-  final oauth2.Credentials credentials;
-  final http.Client delegateClient;
-  
-  MockOAuthClient({
-    required this.credentials,
-    required this.delegateClient,
-  });
-  
-  @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    // Add auth header to the request
-    request.headers['Authorization'] = 'Bearer ${credentials.accessToken}';
-    
-    // Delegate to the MockHttpClient which will return our mocked responses
-    return delegateClient.send(request);
-  }
-}
-
-/// Mock AuthManager for testing
-class MockAuthManager implements AuthManager {
-  final bool _isAuthenticated;
-  final http.Client clientToReturn;
-  
-  MockAuthManager({
-    required bool isAuthenticated,
-    required this.clientToReturn,
-  }) : _isAuthenticated = isAuthenticated;
-  
-  @override
-  bool get isAuthenticated => _isAuthenticated;
-  
-  @override
-  http.Client createHttpClient() {
-    return clientToReturn;
-  }
-  
-  @override
-  dynamic noSuchMethod(Invocation invocation) {
-    return super.noSuchMethod(invocation);
-  }
 } 
