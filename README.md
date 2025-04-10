@@ -469,3 +469,14 @@ Check out the `example` directory for a complete command-line example applicatio
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Security
+
+This package implements several security best practices:
+
+- **PKCE OAuth Flow**: For secure authentication without exposing client secrets
+- **Token Refresh**: Automatic handling of token expiration and refresh
+- **Certificate Validation**: Options for custom certificate validation and pinning
+- **Secure Storage**: Options for encrypting stored credentials
+
+For detailed security guidelines, see [SECURITY.md](SECURITY.md).

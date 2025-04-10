@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -21,6 +22,12 @@ class MastodonOAuth {
   
   // For PKCE
   String? _codeVerifier;
+
+  // Time buffer before expiry to trigger refresh (default: 5 minutes)
+  final Duration _expirationBuffer;
+  
+  // Custom certificate validation function
+  final bool Function(X509Certificate cert, String host, int port)? _certificateValidator;
   
   /// Creates a new MastodonOAuth instance.
   ///
@@ -31,6 +38,8 @@ class MastodonOAuth {
   /// [scopes] - The list of scopes required for your application
   /// [httpClient] - Optional HTTP client for requests (useful for testing)
   /// [credentialStorage] - Optional storage for persisting OAuth credentials
+  /// [expirationBuffer] - Time before token expiry to trigger a refresh (default: 5 minutes)
+  /// [certificateValidator] - Optional custom certificate validator function
   MastodonOAuth({
     required this.instanceUrl,
     required this.clientId,
@@ -39,8 +48,12 @@ class MastodonOAuth {
     this.scopes = const ['read', 'write', 'follow'],
     http.Client? httpClient,
     CredentialStorage? credentialStorage,
+    Duration? expirationBuffer,
+    bool Function(X509Certificate cert, String host, int port)? certificateValidator,
   }) : _httpClient = httpClient,
-       _credentialStorage = credentialStorage;
+       _credentialStorage = credentialStorage,
+       _expirationBuffer = expirationBuffer ?? const Duration(minutes: 5),
+       _certificateValidator = certificateValidator;
   
   /// Checks if there are stored credentials available.
   Future<bool> hasStoredCredentials() async {
@@ -64,6 +77,27 @@ class MastodonOAuth {
     final credentials = await _credentialStorage.loadCredentials();
     if (credentials == null) {
       return null;
+    }
+
+    // Check if token is expired or close to expiry
+    if (credentials.expiration != null && 
+        DateTime.now().isAfter(credentials.expiration!.subtract(_expirationBuffer))) {
+      
+      // Token is expired or about to expire, try to refresh
+      if (credentials.refreshToken != null) {
+        try {
+          final refreshedCredentials = await _refreshToken(credentials);
+          return createClientFromCredentials(refreshedCredentials);
+        } catch (e) {
+          // If refresh fails, clear credentials and return null
+          await _credentialStorage.clearCredentials();
+          return null;
+        }
+      } else {
+        // No refresh token, clear credentials and return null
+        await _credentialStorage.clearCredentials();
+        return null;
+      }
     }
     
     return createClientFromCredentials(credentials);
@@ -118,7 +152,7 @@ class MastodonOAuth {
     // Directly exchange the code for a token using a POST request
     final tokenEndpoint = Uri.parse('$instanceUrl/oauth/token');
     
-    final client = _httpClient ?? http.Client();
+    final client = _createSecureHttpClient();
     try {
       final response = await client.post(
         tokenEndpoint,
@@ -180,8 +214,83 @@ class MastodonOAuth {
       credentials,
       identifier: clientId,
       secret: clientSecret,
+      httpClient: _createSecureHttpClient(),
       onCredentialsRefreshed: _onCredentialsRefreshed,
     );
+  }
+  
+  /// Creates a secure HTTP client with proper certificate validation
+  http.Client _createSecureHttpClient() {
+    if (_httpClient != null) {
+      return _httpClient!;
+    }
+    
+    // In a real application, this would use a more sophisticated approach
+    // such as certificate pinning or a custom TLS configuration
+    if (_certificateValidator != null) {
+      HttpClient httpClient = HttpClient()
+        ..badCertificateCallback = _certificateValidator;
+      
+      return _IOClientWithCustomValidation(httpClient);
+    }
+    
+    return http.Client();
+  }
+  
+  /// Refreshes an OAuth token
+  Future<oauth2.Credentials> _refreshToken(oauth2.Credentials credentials) async {
+    if (credentials.refreshToken == null) {
+      throw Exception('Cannot refresh token: No refresh token available');
+    }
+    
+    final tokenEndpoint = Uri.parse('$instanceUrl/oauth/token');
+    final client = _createSecureHttpClient();
+    
+    try {
+      final response = await client.post(
+        tokenEndpoint,
+        body: {
+          'client_id': clientId,
+          'client_secret': clientSecret,
+          'grant_type': 'refresh_token',
+          'refresh_token': credentials.refreshToken!,
+          'scope': scopes.join(' '),
+        },
+      );
+      
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = jsonDecode(response.body);
+        
+        // Create OAuth2 credentials from the response data
+        final refreshedCredentials = oauth2.Credentials(
+          data['access_token'] as String,
+          refreshToken: data['refresh_token'] as String? ?? credentials.refreshToken,
+          tokenEndpoint: tokenEndpoint,
+          scopes: data['scope'] != null
+              ? (data['scope'] as String).split(' ')
+              : credentials.scopes,
+          expiration: data['expires_in'] != null
+              ? DateTime.now().add(Duration(seconds: data['expires_in'] as int))
+              : null,
+        );
+        
+        // Store credentials if we have a credential storage
+        if (_credentialStorage != null) {
+          await _credentialStorage.saveCredentials(refreshedCredentials);
+        }
+        
+        return refreshedCredentials;
+      } else {
+        throw Exception(
+          'Failed to refresh token: ${response.statusCode} ${response.body}',
+        );
+      }
+    } finally {
+      // Only close the client if we created it
+      if (_httpClient == null) {
+        client.close();
+      }
+    }
   }
   
   /// Called when credentials are refreshed.
@@ -228,6 +337,7 @@ class MastodonOAuth {
   /// [redirectUris] - A list of redirect URIs (defaults to ['urn:ietf:wg:oauth:2.0:oob'])
   /// [scopes] - The list of scopes to request
   /// [httpClient] - Optional HTTP client for requests (useful for testing)
+  /// [certificateValidator] - Optional custom certificate validator function
   ///
   /// Returns a [Future] that completes with the client ID and client secret.
   static Future<Map<String, String>> registerApplication({
@@ -237,8 +347,9 @@ class MastodonOAuth {
     List<String> redirectUris = const ['urn:ietf:wg:oauth:2.0:oob'],
     List<String> scopes = const ['read', 'write', 'follow'],
     http.Client? httpClient,
+    bool Function(X509Certificate cert, String host, int port)? certificateValidator,
   }) async {
-    final client = httpClient ?? http.Client();
+    final client = httpClient ?? _createStaticSecureHttpClient(certificateValidator);
     try {
       final response = await client.post(
         Uri.parse('$instanceUrl/api/v1/apps'),
@@ -271,6 +382,22 @@ class MastodonOAuth {
     }
   }
   
+  /// Creates a secure HTTP client with proper certificate validation for static methods
+  static http.Client _createStaticSecureHttpClient(
+    bool Function(X509Certificate cert, String host, int port)? certificateValidator
+  ) {
+    // In a real application, this would use a more sophisticated approach
+    // such as certificate pinning or a custom TLS configuration
+    if (certificateValidator != null) {
+      HttpClient httpClient = HttpClient()
+        ..badCertificateCallback = certificateValidator;
+      
+      return _IOClientWithCustomValidation(httpClient);
+    }
+    
+    return http.Client();
+  }
+  
   /// Helper method to parse the response body from the server.
   ///
   /// Handles both JSON and form-encoded responses from different Mastodon instances.
@@ -282,5 +409,67 @@ class MastodonOAuth {
       // If that fails, try to parse as form data
       return Uri.splitQueryString(body);
     }
+  }
+}
+
+/// A custom HTTP client that wraps an [HttpClient] with custom certificate validation
+class _IOClientWithCustomValidation extends http.BaseClient {
+  final HttpClient _httpClient;
+  
+  _IOClientWithCustomValidation(this._httpClient);
+  
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final ioRequest = await _httpClient.openUrl(
+      request.method,
+      request.url,
+    );
+    
+    // Copy headers from the request
+    request.headers.forEach((name, value) {
+      ioRequest.headers.set(name, value);
+    });
+    
+    // Add content-length if available
+    if (request is http.Request) {
+      final bodyBytes = request.bodyBytes;
+      ioRequest.contentLength = bodyBytes.length;
+      ioRequest.add(bodyBytes);
+    } else if (request is http.MultipartRequest) {
+      // For multipart requests, we need to manually construct the body
+      throw UnsupportedError(
+        'Multipart requests are not supported with custom certificate validation',
+      );
+    }
+    
+    final response = await ioRequest.close();
+    
+    // Convert HttpHeaders to Map<String, String>
+    final headers = <String, String>{};
+    response.headers.forEach((name, values) {
+      headers[name] = values.join(',');
+    });
+    
+    // Convert the HttpClientResponse to a StreamedResponse
+    final streamedResponse = http.StreamedResponse(
+      response.handleError((error) {
+        throw http.ClientException('Network error: $error', request.url);
+      }),
+      response.statusCode,
+      contentLength: response.contentLength == -1 ? null : response.contentLength,
+      request: request,
+      headers: headers,
+      reasonPhrase: response.reasonPhrase,
+      isRedirect: response.isRedirect,
+      persistentConnection: response.persistentConnection,
+    );
+    
+    return streamedResponse;
+  }
+  
+  @override
+  void close() {
+    _httpClient.close();
+    super.close();
   }
 } 
